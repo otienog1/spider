@@ -145,12 +145,12 @@ class WebScraper:
 
 
 if __name__ == "__main__":
-    target_url = 'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/ke/tune.en-gb.html'
+    # target_url = 'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html'
+    target_url = 'https://www.booking.com/hotel/ke/tune.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/ae/orchid-dubai123.html'
-    # target_url = 'https://www.booking.com/hotel/ae/orchid-dubai123.html?aid=356980&label=gog235jc-1FCAsoAkIfcHVsbG1hbi1kdWJhaS1jcmVlay1jaXR5LWNlbnRyZUgzWANodogBAZgBCbgBF8gBDNgBAegBAfgBDIgCAagCA7gCtv7sqgbAAgHSAiRjY2MwZjhlNC0wYTUzLTRjNjgtYmIzZi02YzFkYTYwZDFkYWPYAgbgAgE&sid=33f443916889878184ddf82a67d28fb2&dest_id=-782831&dest_type=city&group_adults=2&group_children=0&no_rooms=1&sb_travel_purpose=0&ucfac=151&'
+
     with WebScraper(target_url) as scraper:
         scraper.open_and_scrape_in_new_tab()
