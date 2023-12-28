@@ -1,7 +1,11 @@
 import time
 from urllib.parse import urljoin, urlparse
 from selenium import webdriver
-from selenium.common import TimeoutException, StaleElementReferenceException, NoSuchElementException
+from selenium.common import (
+    TimeoutException,
+    StaleElementReferenceException,
+    NoSuchElementException,
+)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -14,20 +18,23 @@ def parse_url(url):
     scheme = parsed_url.scheme
     netloc = parsed_url.netloc
     path = parsed_url.path
-    if path.endswith('.html'):
-        parts = path.rsplit('.', 1)
-        if len(parts) == 1 or 'en-gb' not in parts[0]:
+    if path.endswith(".html"):
+        parts = path.rsplit(".", 1)
+        if len(parts) == 1 or "en-gb" not in parts[0]:
             path = f"{parts[0]}.en-gb.html"
 
-        return urljoin(f'{scheme}://{netloc}', path)
+        return urljoin(f"{scheme}://{netloc}", path)
 
 
 def init_driver():
     options = webdriver.ChromeOptions()
     options.add_experimental_option("detach", True)
-    return webdriver.Chrome(options=options,
-                            service=ChromeService(ChromeDriverManager().install(), chrome_driver_version="latest"
-                                                  ))
+    return webdriver.Chrome(
+        options=options,
+        service=ChromeService(
+            ChromeDriverManager().install(), chrome_driver_version="latest"
+        ),
+    )
 
 
 class WebScraper:
@@ -61,29 +68,40 @@ class WebScraper:
             driver.get(url)
 
             WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, 'bui-carousel__inner'))
+                EC.presence_of_element_located((By.CLASS_NAME, "bui-carousel__inner"))
             )
 
-            titles = driver.find_elements(By.CSS_SELECTOR, '.hp__hotel-title.pp-header')
-            summaries = driver.find_elements(By.CSS_SELECTOR, '.hotel_description_review_display')
+            titles = driver.find_elements(By.CSS_SELECTOR, ".hp__hotel-title.pp-header")
+            summaries = driver.find_elements(
+                By.CSS_SELECTOR, ".hotel_description_review_display"
+            )
 
             for title in titles:
-                title = title.find_element(By.CSS_SELECTOR, 'h2')
+                title = title.find_element(By.CSS_SELECTOR, "h2")
                 if title:
                     print(f"Title: {title.text.strip()}")
 
             for summary in summaries:
-                summary = summary.find_element(By.CSS_SELECTOR, '.a53cbfa6de.b3efd73f69')
+                summary = summary.find_element(
+                    By.CSS_SELECTOR, ".a53cbfa6de.b3efd73f69"
+                )
                 if summary:
                     print(f"Summary: {summary.text.strip()}")
                     print("-----------")
 
-            carousel_div = driver.find_element(By.CLASS_NAME, 'bui-carousel__inner')
-            links = carousel_div.find_elements(By.TAG_NAME, 'a')
+            carousel_div = driver.find_element(By.CLASS_NAME, "bui-carousel__inner")
+            links = carousel_div.find_elements(By.TAG_NAME, "a")
 
-            new_links = [link.get_attribute('href') for link in links if link.get_attribute('href')]
-            new_links = [parse_url(link) for link in new_links if
-                         parse_url(link) and parse_url(link) not in self._link_list]
+            new_links = [
+                link.get_attribute("href")
+                for link in links
+                if link.get_attribute("href")
+            ]
+            new_links = [
+                parse_url(link)
+                for link in new_links
+                if parse_url(link) and parse_url(link) not in self._link_list
+            ]
 
             print("Collected Links:")
             for link in new_links:
@@ -102,6 +120,7 @@ class WebScraper:
                 print(f"Crawled Link Length: - {len(self._crawled_links)}")
 
                 current_url = parse_url(url)
+
                 if current_url not in self._crawled_links:
                     # Open the link in a new tab
                     driver.execute_script(f"window.open('{current_url}', '_blank');")
@@ -112,55 +131,65 @@ class WebScraper:
                     print(f"Crawled Link: {self._crawled_links}")
 
                     try:
-
+                        # Scraping logic
                         WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located((By.CLASS_NAME, 'bui-carousel__inner'))
+                            EC.presence_of_element_located(
+                                (By.CLASS_NAME, "bui-carousel__inner")
+                            )
                         )
 
-                        titles = driver.find_elements(By.CSS_SELECTOR, '.hp__hotel-title.pp-header')
-                        summaries = driver.find_elements(By.CSS_SELECTOR, '.hotel_description_review_display')
+                        titles = driver.find_elements(
+                            By.CSS_SELECTOR, ".hp__hotel-title.pp-header"
+                        )
+                        summaries = driver.find_elements(
+                            By.CSS_SELECTOR, ".hotel_description_review_display"
+                        )
 
                         for title in titles:
-                            title = title.find_element(By.CSS_SELECTOR, 'h2')
+                            title = title.find_element(By.CSS_SELECTOR, "h2")
                             if title:
                                 print(f"Title: {title.text.strip()}")
 
                         for summary in summaries:
-                            summary = summary.find_element(By.CSS_SELECTOR, '.a53cbfa6de.b3efd73f69')
+                            summary = summary.find_element(
+                                By.CSS_SELECTOR, ".a53cbfa6de.b3efd73f69"
+                            )
                             if summary:
                                 print(f"Summary: {summary.text.strip()}")
                                 print("-----------")
 
                         # Find the div with class 'bui-carousel__inner' in the new tab
-                        carousel_div = driver.find_element(By.CLASS_NAME, 'bui-carousel__inner')
+                        carousel_div = driver.find_element(
+                            By.CLASS_NAME, "bui-carousel__inner"
+                        )
 
                         # Find all links within the div
-                        new_links = carousel_div.find_elements(By.TAG_NAME, 'a')
+                        new_links = carousel_div.find_elements(By.TAG_NAME, "a")
 
                         # Collect href attributes into the original list
                         for new_link in new_links:
-                            new_href = parse_url(new_link.get_attribute('href'))
-                            if new_href and new_href not in self._link_list and parse_url(
-                                    new_href) not in self._crawled_links:
+                            new_href = parse_url(new_link.get_attribute("href"))
+                            if (
+                                    new_href
+                                    and new_href not in self._link_list
+                                    and parse_url(new_href) not in self._crawled_links
+                            ):
                                 print(f"New Link: {new_href}")
                                 self._link_list.append(new_href)
 
                     except TimeoutException:
                         print(
-                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to "
-                            f"the next link.")
+                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next link.")
                         continue
 
                     except StaleElementReferenceException:
                         print(
-                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to "
-                            f"the next iteration.")
+                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to the next iteration.")
                         continue
 
                     except NoSuchElementException:
                         print(
-                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. "
-                            f"Moving to the next iteration.")
+                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next iteration.")
                         continue
 
                     finally:
@@ -169,6 +198,7 @@ class WebScraper:
                         # Switch back to the original tab
                         driver.switch_to.window(driver.window_handles[0])
 
+                        # Append the current URL from the crawled link list
                     self._crawled_links.append(parse_url(current_url))
 
                     # Remove the current URL from the link list since it has been processed
@@ -177,13 +207,13 @@ class WebScraper:
 
 if __name__ == "__main__":
     target_url = [
-        'https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html',
-        'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html',
-        'https://www.booking.com/hotel/ke/tune.en-gb.html',
-        'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html',
-        'https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html',
-        'https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html',
-        'https://www.booking.com/hotel/ae/orchid-dubai123.html'
+        "https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html",
+        "https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html",
+        "https://www.booking.com/hotel/ke/tune.en-gb.html",
+        "https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html",
+        "https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html",
+        "https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html",
+        "https://www.booking.com/hotel/ae/orchid-dubai123.en-gb.html",
     ]
 
     with WebScraper(target_url) as scraper:
