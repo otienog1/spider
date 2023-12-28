@@ -150,19 +150,22 @@ class WebScraper:
                     except TimeoutException:
                         # Handle the TimeoutException (element not found) and proceed to the next link
                         print(
-                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next link.")
+                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to "
+                            f"the next link.")
                         continue
 
                     except StaleElementReferenceException:
                         # Handle the StaleElementReferenceException and proceed to the next iteration
                         print(
-                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to the next iteration.")
+                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to "
+                            f"the next iteration.")
                         continue
 
                     except NoSuchElementException:
                         # Handle the NoSuchElementException and proceed to the next iteration
                         print(
-                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next iteration.")
+                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. "
+                            f"Moving to the next iteration.")
                         continue
 
                     finally:
