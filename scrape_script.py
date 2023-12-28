@@ -1,7 +1,7 @@
 import time
 from urllib.parse import urljoin, urlparse
 from selenium import webdriver
-from selenium.common import TimeoutException, StaleElementReferenceException
+from selenium.common import TimeoutException, StaleElementReferenceException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -96,6 +96,8 @@ class WebScraper:
         with self.driver as driver:
             while self._link_list:
                 print(f"Link List: {self._link_list}")
+                print(f"Link List Length: - {len(self._link_list)}")
+                print(f"Crawled Link Length: - {len(self._crawled_links)}")
                 current_url = parse_url(self._link_list.pop(0))
                 if current_url not in self._crawled_links:
                     # Open the link in a new tab
@@ -107,13 +109,10 @@ class WebScraper:
                     print(f"Crawled Link: {self._crawled_links}")
 
                     try:
-                        print("Before WebDriverWait")
 
                         WebDriverWait(driver, 20).until(
                             EC.presence_of_element_located((By.CLASS_NAME, 'bui-carousel__inner'))
                         )
-
-                        print("After WebDriverWait")
 
                         titles = driver.find_elements(By.CSS_SELECTOR, '.hp__hotel-title.pp-header')
                         summaries = driver.find_elements(By.CSS_SELECTOR, '.hotel_description_review_display')
@@ -156,6 +155,12 @@ class WebScraper:
                         # Handle the StaleElementReferenceException and proceed to the next iteration
                         print(
                             f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to the next iteration.")
+                        continue
+
+                    except NoSuchElementException:
+                        # Handle the NoSuchElementException and proceed to the next iteration
+                        print(
+                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next iteration.")
                         continue
 
                     finally:
