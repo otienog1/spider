@@ -145,8 +145,6 @@ class WebScraper:
                                 print(f"New Link: {new_href}")
                                 self._link_list.append(new_href)
 
-                        # Add the current URL to crawled links
-                        self._crawled_links.append(parse_url(current_url))
                     except TimeoutException:
                         print(
                             f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to "
@@ -170,6 +168,11 @@ class WebScraper:
                         driver.close()
                         # Switch back to the original tab
                         driver.switch_to.window(driver.window_handles[0])
+
+                    self._crawled_links.append(parse_url(current_url))
+
+                    # Remove the current URL from the link list since it has been processed
+                    self._link_list.remove(current_url)
 
 
 if __name__ == "__main__":
