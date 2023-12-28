@@ -1,5 +1,7 @@
+import time
 from urllib.parse import urljoin, urlparse
 from selenium import webdriver
+from selenium.common import TimeoutException, StaleElementReferenceException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -13,6 +15,10 @@ def parse_url(url):
     netloc = parsed_url.netloc
     path = parsed_url.path
     if path.endswith('.html'):
+        parts = path.rsplit('.', 1)
+        if len(parts) == 1 or 'en-gb' not in parts[0]:
+            path = f"{parts[0]}.en-gb.html"
+
         return urljoin(f'{scheme}://{netloc}', path)
 
 
@@ -94,18 +100,20 @@ class WebScraper:
                 if current_url not in self._crawled_links:
                     # Open the link in a new tab
                     driver.execute_script(f"window.open('{current_url}', '_blank');")
+                    # Add a wait of 2 seconds
+                    time.sleep(2)
                     # Switch to the new tab
                     driver.switch_to.window(driver.window_handles[-1])
                     print(f"Crawled Link: {self._crawled_links}")
 
                     try:
-                        WebDriverWait(driver, 10).until(
+                        print("Before WebDriverWait")
+
+                        WebDriverWait(driver, 20).until(
                             EC.presence_of_element_located((By.CLASS_NAME, 'bui-carousel__inner'))
                         )
 
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CLASS_NAME, 'bui-carousel__inner'))
-                        )
+                        print("After WebDriverWait")
 
                         titles = driver.find_elements(By.CSS_SELECTOR, '.hp__hotel-title.pp-header')
                         summaries = driver.find_elements(By.CSS_SELECTOR, '.hotel_description_review_display')
@@ -137,6 +145,19 @@ class WebScraper:
 
                         # Add the current URL to crawled links
                         self._crawled_links.append(parse_url(current_url))
+
+                    except TimeoutException:
+                        # Handle the TimeoutException (element not found) and proceed to the next link
+                        print(
+                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next link.")
+                        continue
+
+                    except StaleElementReferenceException:
+                        # Handle the StaleElementReferenceException and proceed to the next iteration
+                        print(
+                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to the next iteration.")
+                        continue
+
                     finally:
                         # Close the new tab
                         driver.close()
@@ -145,6 +166,7 @@ class WebScraper:
 
 
 if __name__ == "__main__":
+    # target_url = 'https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html'
     target_url = 'https://www.booking.com/hotel/ke/tune.en-gb.html'
     # target_url = 'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html'
