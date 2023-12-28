@@ -171,13 +171,15 @@ class WebScraper:
 
 
 if __name__ == "__main__":
-    # target_url = 'https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html'
-    target_url = 'https://www.booking.com/hotel/ke/tune.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html'
-    # target_url = 'https://www.booking.com/hotel/ae/orchid-dubai123.html'
+    target_url = [
+        'https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html',
+        'https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html',
+        'https://www.booking.com/hotel/ke/tune.en-gb.html',
+        'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html',
+        'https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html',
+        'https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html',
+        'https://www.booking.com/hotel/ae/orchid-dubai123.html'
+    ]
 
     with WebScraper(target_url) as scraper:
         scraper.open_and_scrape_in_new_tab()
