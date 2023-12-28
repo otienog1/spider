@@ -34,8 +34,10 @@ class WebScraper:
     def __init__(self, url):
         self.url = url
         self.driver = init_driver()
-        self._link_list = [url]
+        self._link_list = []
         self._crawled_links = []
+
+        self._link_list.extend(url)
 
     @property
     def link_list(self):
