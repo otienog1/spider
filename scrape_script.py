@@ -112,6 +112,70 @@ class WebScraper:
 
             return new_links
 
+    def scrape_continent(self, url):
+        with self.driver as driver:
+            driver.get(url)
+
+            try:
+                WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located(
+                        (By.CLASS_NAME, "bui-carousel__item")
+                    )
+                )
+
+                WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located(
+                        (By.CLASS_NAME, "bui-list__description-title")
+                    )
+                )
+
+                # Find all spans with class 'bui-list__description-title
+                description_spans = driver.find_elements(
+                    By.CLASS_NAME, "bui-list__description-title"
+                )
+
+                # Find all carousel items
+                carousel_items = driver.find_elements(By.CLASS_NAME, "bui-carousel__item")
+
+                # Collect href attributes of links within carousel items
+                href_list = []
+                for item in carousel_items:
+                    links = item.find_elements(By.TAG_NAME, 'a')
+                    href_list.extend(
+                        parse_url(link.get_attribute('href')) for link in links if link.get_attribute('href')
+                    )
+
+                for span in description_spans:
+                    link = span.find_element(By.TAG_NAME, 'a')
+                    href = parse_url(link.get_attribute('href'))
+                    if href:
+                        href_list.append(href)
+
+                # Add the collected href attributes to the link list
+                self._link_list.extend(href_list)
+
+                print(href_list)
+
+                return href_list
+
+            except TimeoutException:
+                print(
+                    f"TimeoutException: Element 'bui-carousel__item' not found on {url}. Moving to the next link."
+                )
+                return []
+            except StaleElementReferenceException:
+                print(
+                    f"StaleElementReferenceException: Element 'summary' is stale on {url}. Moving to the next iteration."
+                )
+                return []
+
+            except NoSuchElementException:
+                print(
+                    f"NoSuchElementException: Element 'bui-carousel__inner' not found on {url}. Moving to the next "
+                    f"iteration."
+                )
+                return []
+
     def open_and_scrape_in_new_tab(self):
         with self.driver as driver:
             for url in self._link_list:
@@ -202,7 +266,7 @@ class WebScraper:
                     self._crawled_links.append(parse_url(current_url))
 
                     # Remove the current URL from the link list since it has been processed
-                    self._link_list.remove(current_url)
+                    # self._link_list.remove(current_url)
 
 
 if __name__ == "__main__":
@@ -214,7 +278,43 @@ if __name__ == "__main__":
         "https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html",
         "https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html",
         "https://www.booking.com/hotel/ae/orchid-dubai123.en-gb.html",
+        'https://www.booking.com/hotel/ke/radisson-blu-nairobi.en-gb.html',
+        'https://www.booking.com/hotel/ke/the-sands-at-nomad.en-gb.html',
+        'https://www.booking.com/hotel/ke/coral-beach-resort.en-gb.html',
+        'https://www.booking.com/hotel/ke/diani-reef-beach-resort-spa.en-gb.html',
+        'https://www.booking.com/hotel/ke/jacaranda-indian-ocean-beach-resort.en-gb.html',
+        'https://www.booking.com/hotel/ke/best-western-plus-creekside.en-gb.html',
+        'https://www.booking.com/hotel/ke/sarova-whitesands-beach-resort-amp-spa.en-gb.html',
+        'https://www.booking.com/hotel/ke/englishpoint.en-gb.html',
+        'https://www.booking.com/hotel/ke/prideinn-links-road.en-gb.html',
+        'https://www.booking.com/hotel/ke/bahari-beach.en-gb.html',
+        'https://www.booking.com/hotel/ke/tribe-nairobi.en-gb.html',
+        'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html',
+        'https://www.booking.com/hotel/ke/the-sands-at-nomad.en-gb.html',
+        'https://www.booking.com/hotel/ke/diani-reef-beach-resort-spa.en-gb.html',
+        'https://www.booking.com/hotel/ke/prideinn-diani-diani-beach5.en-gb.html',
+        'https://www.booking.com/hotel/ke/blue-marlin-beach-resort.en-gb.html',
+        'https://www.booking.com/hotel/ke/flamboyant-bed-and-breakfast.en-gb.html',
+        'https://www.booking.com/hotel/ke/aqua-resort.en-gb.html',
+        'https://www.booking.com/hotel/tz/arusha-coffee-lodge.en-gb.html',
+        'https://www.booking.com/hotel/tz/gran-melia-arusha.en-gb.html',
+        'https://www.booking.com/hotel/tz/east-african.en-gb.html',
+        'https://www.booking.com/hotel/tz/kibo-palace.en-gb.html',
+        'https://www.booking.com/hotel/tz/tulia-amp-spa.en-gb.html',
+        'https://www.booking.com/hotel/tz/mount-meru-arusha.en-gb.html',
+        'https://www.booking.com/hotel/ke/amboseli-sopa-lodge.en-gb.html',
+        'https://www.booking.com/hotel/ke/kilima-safari-camp.en-gb.html',
+        'https://www.booking.com/hotel/ke/amboseli-serena-safari-lodge.en-gb.html',
+        'https://www.booking.com/hotel/ke/little-amanya-camp-amboseli-national-park.en-gb.html',
+        'https://www.booking.com/hotel/ke/kibo-safari-camp.en-gb.html',
+        'https://www.booking.com/hotel/ke/tulia-amboseli-safari-camp.en-gb.html',
+        'https://www.booking.com/hotel/ke/tawi-lodge.en-gb.html',
+        'https://www.booking.com/hotel/tz/kilindi-zanzibar-nungwi.en-gb.html',
+        'https://www.booking.com/hotel/tz/zuri-zanzibar.en-gb.html',
+        'https://www.booking.com/hotel/tz/the-manor-at-ngorongoro.en-gb.html',
     ]
+    continent = 'https://www.booking.com/continent/africa.en-gb.html'
 
     with WebScraper(target_url) as scraper:
-        scraper.open_and_scrape_in_new_tab()
+        # scraper.open_and_scrape_in_new_tab()
+        scraper.scrape_continent(continent)
