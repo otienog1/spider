@@ -1,2 +1,4 @@
 .vscode
 .idea
+/hotel_data
+hotel_crawler.log

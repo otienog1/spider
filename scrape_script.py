@@ -1,320 +1,399 @@
+import asyncio
+import json
+import random
 import time
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Union
 from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
+
+import aiohttp
+import yaml
+from pydantic import BaseModel, HttpUrl
 from selenium import webdriver
-from selenium.common import (
+from selenium.common.exceptions import (
     TimeoutException,
     StaleElementReferenceException,
     NoSuchElementException,
+    WebDriverException,
 )
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import logging
+from concurrent.futures import ThreadPoolExecutor
+import backoff
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("hotel_crawler.log"), logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
 
 
-def parse_url(url):
-    parsed_url = urlparse(url)
-    scheme = parsed_url.scheme
-    netloc = parsed_url.netloc
-    path = parsed_url.path
-    if path.endswith(".html"):
-        parts = path.rsplit(".", 1)
-        if len(parts) == 1 or "en-gb" not in parts[0]:
-            path = f"{parts[0]}.en-gb.html"
+# Configuration Models
+class ScraperConfig(BaseModel):
+    max_retries: int = 3
+    retry_delay: float = 1.0
+    concurrent_requests: int = 5
+    request_timeout: int = 30
+    max_pages_per_hotel: int = 100
+    user_agents: List[str]
+    output_directory: str
+    respect_robots_txt: bool = True
+    rate_limit_delay: tuple[float, float] = (2.0, 5.0)
 
-        return urljoin(f"{scheme}://{netloc}", path)
+
+class HotelWebsiteConfig(BaseModel):
+    name: str
+    base_url: HttpUrl
+    selectors: Dict[str, str]
+    required_cookies: Dict[str, str] = {}
+    headers: Dict[str, str] = {}
 
 
-def init_driver():
-    options = webdriver.ChromeOptions()
-    options.add_experimental_option("detach", True)
-    return webdriver.Chrome(
-        options=options,
-        service=ChromeService(
-            ChromeDriverManager().install(), chrome_driver_version="latest"
-        ),
+# Data Models
+@dataclass
+class HotelAmenity:
+    category: str
+    name: str
+    description: Optional[str] = None
+    is_available: bool = True
+
+
+@dataclass
+class HotelRoom:
+    name: str
+    description: Optional[str]
+    amenities: List[HotelAmenity]
+    max_occupancy: Optional[int]
+    price_range: Optional[tuple[float, float]]
+
+
+@dataclass
+class Hotel:
+    name: str
+    url: str
+    description: Optional[str]
+    address: Optional[str]
+    rating: Optional[float]
+    review_count: Optional[int]
+    amenities: List[HotelAmenity]
+    rooms: List[HotelRoom]
+    images: List[str]
+    crawled_at: datetime
+    source_website: str
+
+
+class RateLimiter:
+    def __init__(self, min_delay: float, max_delay: float):
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.last_request_time: Dict[str, float] = {}
+
+    async def wait(self, domain: str):
+        """Implement rate limiting per domain"""
+        if domain in self.last_request_time:
+            elapsed = time.time() - self.last_request_time[domain]
+            delay = random.uniform(self.min_delay, self.max_delay)
+            if elapsed < delay:
+                await asyncio.sleep(delay - elapsed)
+        self.last_request_time[domain] = time.time()
+
+
+class RobotsChecker:
+    def __init__(self):
+        self._parsers: Dict[str, RobotFileParser] = {}
+
+    @backoff.on_exception(
+        backoff.expo, (aiohttp.ClientError, asyncio.TimeoutError), max_tries=3
     )
+    async def can_fetch(self, url: str, user_agent: str) -> bool:
+        parsed_url = urlparse(url)
+        domain = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+        if domain not in self._parsers:
+            parser = RobotFileParser()
+            parser.set_url(f"{domain}/robots.txt")
+
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.get(f"{domain}/robots.txt") as response:
+                        if response.status == 200:
+                            content = await response.text()
+                            parser.parse(content.splitlines())
+                except Exception as e:
+                    logger.warning(f"Could not fetch robots.txt for {domain}: {e}")
+                    return True
+
+            self._parsers[domain] = parser
+
+        return self._parsers[domain].can_fetch(user_agent, url)
 
 
-class WebScraper:
-    def __init__(self, url):
-        self.url = url
-        self.driver = init_driver()
-        self._link_list = []
-        self._crawled_links = []
+class HotelScraper:
+    def __init__(
+        self, config: ScraperConfig, website_configs: List[HotelWebsiteConfig]
+    ):
+        self.config = config
+        self.website_configs = {config.name: config for config in website_configs}
+        self.rate_limiter = RateLimiter(
+            min_delay=config.rate_limit_delay[0], max_delay=config.rate_limit_delay[1]
+        )
+        self.robots_checker = RobotsChecker()
+        self.seen_urls: Set[str] = set()
+        self._setup_output_directory()
 
-        self._link_list.extend(url)
+    def _setup_output_directory(self):
+        self.output_dir = Path(self.config.output_directory)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def link_list(self):
-        return self._link_list
+    def _get_driver(self) -> WebDriver:
+        """Initialize WebDriver with rotating user agents"""
+        options = webdriver.ChromeOptions()
+        options.add_argument(f"user-agent={random.choice(self.config.user_agents)}")
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
 
-    @property
-    def crawled_links(self):
-        return self._crawled_links
+        return webdriver.Chrome(
+            options=options, service=ChromeService(ChromeDriverManager().install())
+        )
 
-    def __enter__(self):
-        return self
+    async def _extract_hotel_data(
+        self, driver: WebDriver, url: str, website_config: HotelWebsiteConfig
+    ) -> Optional[Hotel]:
+        """Extract hotel data using provided selectors"""
+        try:
+            await self.rate_limiter.wait(urlparse(url).netloc)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.driver.quit()
-
-    def scrape_page(self, url=None):
-        if url is None:
-            url = self.url
-
-        with self.driver as driver:
             driver.get(url)
-
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "bui-carousel__inner"))
-            )
-
-            titles = driver.find_elements(By.CSS_SELECTOR, ".hp__hotel-title.pp-header")
-            summaries = driver.find_elements(
-                By.CSS_SELECTOR, ".hotel_description_review_display"
-            )
-
-            for title in titles:
-                title = title.find_element(By.CSS_SELECTOR, "h2")
-                if title:
-                    print(f"Title: {title.text.strip()}")
-
-            for summary in summaries:
-                summary = summary.find_element(
-                    By.CSS_SELECTOR, ".a53cbfa6de.b3efd73f69"
+            WebDriverWait(driver, self.config.request_timeout).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, website_config.selectors["hotel_name"])
                 )
-                if summary:
-                    print(f"Summary: {summary.text.strip()}")
-                    print("-----------")
+            )
 
-            carousel_div = driver.find_element(By.CLASS_NAME, "bui-carousel__inner")
-            links = carousel_div.find_elements(By.TAG_NAME, "a")
+            # Extract basic hotel information
+            name = driver.find_element(
+                By.CSS_SELECTOR, website_config.selectors["hotel_name"]
+            ).text.strip()
 
-            new_links = [
-                link.get_attribute("href")
-                for link in links
-                if link.get_attribute("href")
-            ]
-            new_links = [
-                parse_url(link)
-                for link in new_links
-                if parse_url(link) and parse_url(link) not in self._link_list
-            ]
-
-            print("Collected Links:")
-            for link in new_links:
-                print(link)
-
-            self._link_list.extend(new_links)
-            self._crawled_links.append(parse_url(url))
-
-            return new_links
-
-    def scrape_continent(self, url):
-        with self.driver as driver:
-            driver.get(url)
-
+            description = None
             try:
-                WebDriverWait(driver, 5).until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "bui-carousel__item")
-                    )
-                )
-
-                WebDriverWait(driver, 5).until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "bui-list__description-title")
-                    )
-                )
-
-                # Find all spans with class 'bui-list__description-title
-                description_spans = driver.find_elements(
-                    By.CLASS_NAME, "bui-list__description-title"
-                )
-
-                # Find all carousel items
-                carousel_items = driver.find_elements(By.CLASS_NAME, "bui-carousel__item")
-
-                # Collect href attributes of links within carousel items
-                href_list = []
-                for item in carousel_items:
-                    links = item.find_elements(By.TAG_NAME, 'a')
-                    href_list.extend(
-                        parse_url(link.get_attribute('href')) for link in links if link.get_attribute('href')
-                    )
-
-                for span in description_spans:
-                    link = span.find_element(By.TAG_NAME, 'a')
-                    href = parse_url(link.get_attribute('href'))
-                    if href:
-                        href_list.append(href)
-
-                # Add the collected href attributes to the link list
-                self._link_list.extend(href_list)
-
-                print(href_list)
-
-                return href_list
-
-            except TimeoutException:
-                print(
-                    f"TimeoutException: Element 'bui-carousel__item' not found on {url}. Moving to the next link."
-                )
-                return []
-            except StaleElementReferenceException:
-                print(
-                    f"StaleElementReferenceException: Element 'summary' is stale on {url}. Moving to the next iteration."
-                )
-                return []
-
+                description = driver.find_element(
+                    By.CSS_SELECTOR, website_config.selectors["description"]
+                ).text.strip()
             except NoSuchElementException:
-                print(
-                    f"NoSuchElementException: Element 'bui-carousel__inner' not found on {url}. Moving to the next "
-                    f"iteration."
+                pass
+
+            # Extract amenities
+            amenities = []
+            amenity_elements = driver.find_elements(
+                By.CSS_SELECTOR, website_config.selectors["amenities"]
+            )
+            for element in amenity_elements:
+                try:
+                    category = element.get_attribute("data-category")
+                    name = element.text.strip()
+                    amenities.append(
+                        HotelAmenity(category=category or "general", name=name)
+                    )
+                except Exception as e:
+                    logger.warning(f"Error extracting amenity: {e}")
+
+            # Extract rooms
+            rooms = []
+            room_elements = driver.find_elements(
+                By.CSS_SELECTOR, website_config.selectors["rooms"]
+            )
+            for element in room_elements:
+                try:
+                    room = self._extract_room_data(element, website_config)
+                    if room:
+                        rooms.append(room)
+                except Exception as e:
+                    logger.warning(f"Error extracting room data: {e}")
+
+            return Hotel(
+                name=name,
+                url=url,
+                description=description,
+                address=None,  # Add address extraction
+                rating=None,  # Add rating extraction
+                review_count=None,  # Add review count extraction
+                amenities=amenities,
+                rooms=rooms,
+                images=[],  # Add image extraction
+                crawled_at=datetime.now(),
+                source_website=website_config.name,
+            )
+
+        except Exception as e:
+            logger.error(f"Error extracting hotel data from {url}: {e}")
+            return None
+
+    def _extract_room_data(
+        self, element: WebElement, website_config: HotelWebsiteConfig
+    ) -> Optional[HotelRoom]:
+        """Extract room data from a room element"""
+        try:
+            name = element.find_element(
+                By.CSS_SELECTOR, website_config.selectors["room_name"]
+            ).text.strip()
+
+            description = None
+            try:
+                description = element.find_element(
+                    By.CSS_SELECTOR, website_config.selectors["room_description"]
+                ).text.strip()
+            except NoSuchElementException:
+                pass
+
+            # Extract room amenities
+            amenities = []
+            amenity_elements = element.find_elements(
+                By.CSS_SELECTOR, website_config.selectors["room_amenities"]
+            )
+            for amenity_element in amenity_elements:
+                amenities.append(
+                    HotelAmenity(category="room", name=amenity_element.text.strip())
                 )
-                return []
 
-    def open_and_scrape_in_new_tab(self):
-        with self.driver as driver:
-            for url in self._link_list:
-                print(f"Link List: {self._link_list}")
-                print(f"Link List Length: - {len(self._link_list)}")
-                print(f"Crawled Link Length: - {len(self._crawled_links)}")
+            return HotelRoom(
+                name=name,
+                description=description,
+                amenities=amenities,
+                max_occupancy=None,  # Add occupancy extraction
+                price_range=None,  # Add price range extraction
+            )
 
-                current_url = parse_url(url)
+        except Exception as e:
+            logger.warning(f"Error extracting room data: {e}")
+            return None
 
-                if current_url not in self._crawled_links:
-                    # Open the link in a new tab
-                    driver.execute_script(f"window.open('{current_url}', '_blank');")
-                    # Add a wait of 2 seconds
-                    time.sleep(2)
-                    # Switch to the new tab
-                    driver.switch_to.window(driver.window_handles[-1])
-                    print(f"Crawled Link: {self._crawled_links}")
+    async def save_hotel_data(self, hotel: Hotel):
+        """Save hotel data to JSON file"""
+        output_file = self.output_dir / f"{hotel.name}_{hotel.source_website}.json"
+        with output_file.open("w", encoding="utf-8") as f:
+            json.dump(asdict(hotel), f, indent=2, default=str)
 
-                    try:
-                        # Scraping logic
-                        WebDriverWait(driver, 20).until(
-                            EC.presence_of_element_located(
-                                (By.CLASS_NAME, "bui-carousel__inner")
-                            )
-                        )
+    async def crawl_hotel(self, url: str, website_name: str):
+        """Crawl a single hotel website"""
+        if url in self.seen_urls:
+            return
 
-                        titles = driver.find_elements(
-                            By.CSS_SELECTOR, ".hp__hotel-title.pp-header"
-                        )
-                        summaries = driver.find_elements(
-                            By.CSS_SELECTOR, ".hotel_description_review_display"
-                        )
+        self.seen_urls.add(url)
+        website_config = self.website_configs[website_name]
 
-                        for title in titles:
-                            title = title.find_element(By.CSS_SELECTOR, "h2")
-                            if title:
-                                print(f"Title: {title.text.strip()}")
+        if self.config.respect_robots_txt:
+            can_fetch = await self.robots_checker.can_fetch(
+                url, random.choice(self.config.user_agents)
+            )
+            if not can_fetch:
+                logger.info(f"Robots.txt disallows crawling {url}")
+                return
 
-                        for summary in summaries:
-                            summary = summary.find_element(
-                                By.CSS_SELECTOR, ".a53cbfa6de.b3efd73f69"
-                            )
-                            if summary:
-                                print(f"Summary: {summary.text.strip()}")
-                                print("-----------")
+        driver = None
+        try:
+            driver = self._get_driver()
+            hotel_data = await self._extract_hotel_data(driver, url, website_config)
 
-                        # Find the div with class 'bui-carousel__inner' in the new tab
-                        carousel_div = driver.find_element(
-                            By.CLASS_NAME, "bui-carousel__inner"
-                        )
+            if hotel_data:
+                await self.save_hotel_data(hotel_data)
+                logger.info(
+                    f"Successfully crawled and saved data for {hotel_data.name}"
+                )
 
-                        # Find all links within the div
-                        new_links = carousel_div.find_elements(By.TAG_NAME, "a")
+        except Exception as e:
+            logger.error(f"Error crawling {url}: {e}")
 
-                        # Collect href attributes into the original list
-                        for new_link in new_links:
-                            new_href = parse_url(new_link.get_attribute("href"))
-                            if (
-                                    new_href
-                                    and new_href not in self._link_list
-                                    and parse_url(new_href) not in self._crawled_links
-                            ):
-                                print(f"New Link: {new_href}")
-                                self._link_list.append(new_href)
+        finally:
+            if driver:
+                driver.quit()
 
-                    except TimeoutException:
-                        print(
-                            f"TimeoutException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next link.")
-                        continue
+    async def crawl_hotels(self, urls: List[str], website_name: str):
+        """Crawl multiple hotel websites concurrently"""
+        sem = asyncio.Semaphore(self.config.concurrent_requests)
 
-                    except StaleElementReferenceException:
-                        print(
-                            f"StaleElementReferenceException: Element 'summary' is stale on {current_url}. Moving to the next iteration.")
-                        continue
+        async def bounded_crawl(url: str):
+            async with sem:
+                await self.crawl_hotel(url, website_name)
 
-                    except NoSuchElementException:
-                        print(
-                            f"NoSuchElementException: Element 'bui-carousel__inner' not found on {current_url}. Moving to the next iteration.")
-                        continue
+        await asyncio.gather(*[bounded_crawl(url) for url in urls])
 
-                    finally:
-                        # Close the new tab
-                        driver.close()
-                        # Switch back to the original tab
-                        driver.switch_to.window(driver.window_handles[0])
 
-                        # Append the current URL from the crawled link list
-                    self._crawled_links.append(parse_url(current_url))
+def load_config(config_path: str) -> tuple[ScraperConfig, List[HotelWebsiteConfig]]:
+    """Load configuration from YAML file"""
+    with open(config_path) as f:
+        config_data = yaml.safe_load(f)
 
-                    # Remove the current URL from the link list since it has been processed
-                    # self._link_list.remove(current_url)
+    scraper_config = ScraperConfig(**config_data["scraper"])
+    website_configs = [
+        HotelWebsiteConfig(**website_data) for website_data in config_data["websites"]
+    ]
+
+    return scraper_config, website_configs
 
 
 if __name__ == "__main__":
-    target_url = [
-        "https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html",
-        "https://www.booking.com/hotel/ke/fairmont-mara-safari-club.en-gb.html",
-        "https://www.booking.com/hotel/ke/tune.en-gb.html",
-        "https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html",
-        "https://www.booking.com/hotel/ke/kandiz-exquisite.en-gb.html",
-        "https://www.booking.com/hotel/tz/breezes-beach-club-and-spa.en-gb.html",
-        "https://www.booking.com/hotel/ae/orchid-dubai123.en-gb.html",
-        'https://www.booking.com/hotel/ke/radisson-blu-nairobi.en-gb.html',
-        'https://www.booking.com/hotel/ke/the-sands-at-nomad.en-gb.html',
-        'https://www.booking.com/hotel/ke/coral-beach-resort.en-gb.html',
-        'https://www.booking.com/hotel/ke/diani-reef-beach-resort-spa.en-gb.html',
-        'https://www.booking.com/hotel/ke/jacaranda-indian-ocean-beach-resort.en-gb.html',
-        'https://www.booking.com/hotel/ke/best-western-plus-creekside.en-gb.html',
-        'https://www.booking.com/hotel/ke/sarova-whitesands-beach-resort-amp-spa.en-gb.html',
-        'https://www.booking.com/hotel/ke/englishpoint.en-gb.html',
-        'https://www.booking.com/hotel/ke/prideinn-links-road.en-gb.html',
-        'https://www.booking.com/hotel/ke/bahari-beach.en-gb.html',
-        'https://www.booking.com/hotel/ke/tribe-nairobi.en-gb.html',
-        'https://www.booking.com/hotel/ke/the-lazizi-premiere-nairobi.en-gb.html',
-        'https://www.booking.com/hotel/ke/the-sands-at-nomad.en-gb.html',
-        'https://www.booking.com/hotel/ke/diani-reef-beach-resort-spa.en-gb.html',
-        'https://www.booking.com/hotel/ke/prideinn-diani-diani-beach5.en-gb.html',
-        'https://www.booking.com/hotel/ke/blue-marlin-beach-resort.en-gb.html',
-        'https://www.booking.com/hotel/ke/flamboyant-bed-and-breakfast.en-gb.html',
-        'https://www.booking.com/hotel/ke/aqua-resort.en-gb.html',
-        'https://www.booking.com/hotel/tz/arusha-coffee-lodge.en-gb.html',
-        'https://www.booking.com/hotel/tz/gran-melia-arusha.en-gb.html',
-        'https://www.booking.com/hotel/tz/east-african.en-gb.html',
-        'https://www.booking.com/hotel/tz/kibo-palace.en-gb.html',
-        'https://www.booking.com/hotel/tz/tulia-amp-spa.en-gb.html',
-        'https://www.booking.com/hotel/tz/mount-meru-arusha.en-gb.html',
-        'https://www.booking.com/hotel/ke/amboseli-sopa-lodge.en-gb.html',
-        'https://www.booking.com/hotel/ke/kilima-safari-camp.en-gb.html',
-        'https://www.booking.com/hotel/ke/amboseli-serena-safari-lodge.en-gb.html',
-        'https://www.booking.com/hotel/ke/little-amanya-camp-amboseli-national-park.en-gb.html',
-        'https://www.booking.com/hotel/ke/kibo-safari-camp.en-gb.html',
-        'https://www.booking.com/hotel/ke/tulia-amboseli-safari-camp.en-gb.html',
-        'https://www.booking.com/hotel/ke/tawi-lodge.en-gb.html',
-        'https://www.booking.com/hotel/tz/kilindi-zanzibar-nungwi.en-gb.html',
-        'https://www.booking.com/hotel/tz/zuri-zanzibar.en-gb.html',
-        'https://www.booking.com/hotel/tz/the-manor-at-ngorongoro.en-gb.html',
-    ]
-    continent = 'https://www.booking.com/continent/africa.en-gb.html'
+    # Example configuration
+    config_data = {
+        "scraper": {
+            "max_retries": 3,
+            "retry_delay": 1.0,
+            "concurrent_requests": 5,
+            "request_timeout": 30,
+            "max_pages_per_hotel": 100,
+            "user_agents": [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                # Add more user agents...
+            ],
+            "output_directory": "hotel_data",
+            "respect_robots_txt": True,
+            "rate_limit_delay": (2.0, 5.0),
+        },
+        "websites": [
+            {
+                "name": "booking",
+                "base_url": "https://www.booking.com",
+                "selectors": {
+                    "hotel_name": ".hp__hotel-title h2",
+                    "description": ".hotel_description_review_display .a53cbfa6de.b3efd73f69",
+                    "amenities": ".hotel-facilities__list li",
+                    "rooms": ".hprt-table tr:not(.hprt-table-header-row)",
+                    "room_name": ".hprt-roomtype-icon-link",
+                    "room_description": ".hprt-facilities-facility",
+                    "room_amenities": ".hprt-facilities-facility",
+                },
+            }
+            # Add more website configurations...
+        ],
+    }
 
-    with WebScraper(target_url) as scraper:
-        # scraper.open_and_scrape_in_new_tab()
-        scraper.scrape_continent(continent)
+    # Initialize and run the scraper
+    async def main():
+        scraper_config = ScraperConfig(**config_data["scraper"])
+        website_configs = [
+            HotelWebsiteConfig(**website_data)
+            for website_data in config_data["websites"]
+        ]
+
+        scraper = HotelScraper(scraper_config, website_configs)
+
+        target_urls = [
+            "https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html",
+            # Add more URLs...
+        ]
+
+        await scraper.crawl_hotels(target_urls, "booking")
+
+    asyncio.run(main())
