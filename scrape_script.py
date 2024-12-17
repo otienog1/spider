@@ -183,9 +183,13 @@ class HotelScraper:
             )
 
             # Extract basic hotel information
-            name = driver.find_element(
-                By.CSS_SELECTOR, website_config.selectors["hotel_name"]
-            ).text.strip()
+            name = None
+            try:
+                name = driver.find_element(
+                    By.CSS_SELECTOR, website_config.selectors["hotel_name"]
+                ).text.strip()
+            except NoSuchElementException:
+                pass
 
             description = None
             try:
@@ -203,9 +207,9 @@ class HotelScraper:
             for element in amenity_elements:
                 try:
                     category = element.get_attribute("data-category")
-                    name = element.text.strip()
+                    amenity_name = element.text.strip()
                     amenities.append(
-                        HotelAmenity(category=category or "general", name=name)
+                        HotelAmenity(category=category or "general", name=amenity_name)
                     )
                 except Exception as e:
                     logger.warning(f"Error extracting amenity: {e}")
@@ -246,32 +250,32 @@ class HotelScraper:
     ) -> Optional[HotelRoom]:
         """Extract room data from a room element"""
         try:
-            name = element.find_element(
+            room_name = element.find_element(
                 By.CSS_SELECTOR, website_config.selectors["room_name"]
             ).text.strip()
 
-            description = None
+            room_description = None
             try:
-                description = element.find_element(
+                room_description = element.find_element(
                     By.CSS_SELECTOR, website_config.selectors["room_description"]
                 ).text.strip()
             except NoSuchElementException:
                 pass
 
             # Extract room amenities
-            amenities = []
-            amenity_elements = element.find_elements(
+            room_amenities = []
+            room_amenity_elements = element.find_elements(
                 By.CSS_SELECTOR, website_config.selectors["room_amenities"]
             )
-            for amenity_element in amenity_elements:
-                amenities.append(
-                    HotelAmenity(category="room", name=amenity_element.text.strip())
+            for room_amenity_element in room_amenity_elements:
+                room_amenities.append(
+                    HotelAmenity(category="room", name=room_amenity_element.text.strip())
                 )
 
             return HotelRoom(
-                name=name,
-                description=description,
-                amenities=amenities,
+                name=room_name,
+                description=room_description,
+                amenities=room_amenities,
                 max_occupancy=None,  # Add occupancy extraction
                 price_range=None,  # Add price range extraction
             )
@@ -367,12 +371,13 @@ if __name__ == "__main__":
                 "base_url": "https://www.booking.com",
                 "selectors": {
                     "hotel_name": ".hp__hotel-title h2",
-                    "description": ".hotel_description_review_display .a53cbfa6de.b3efd73f69",
-                    "amenities": ".hotel-facilities__list li",
-                    "rooms": ".hprt-table tr:not(.hprt-table-header-row)",
+                    "description": "[data-testid='property-description']",
+                    "amenities": ".e10711a42e li",
+                    "rooms": ".b98133fb50",
                     "room_name": ".hprt-roomtype-icon-link",
                     "room_description": ".hprt-facilities-facility",
                     "room_amenities": ".hprt-facilities-facility",
+                    # "room_amenities": ".b8d011b59c section",
                 },
             }
             # Add more website configurations...
@@ -390,7 +395,10 @@ if __name__ == "__main__":
         scraper = HotelScraper(scraper_config, website_configs)
 
         target_urls = [
-            "https://www.booking.com/hotel/ke/jukes-serene-westlands-villa.en-gb.html",
+            "https://www.booking.com/hotel/tz/gran-melia-arusha.en-gb.html",
+            "https://www.booking.com/hotel/tz/arusha-coffee-lodge.en-gb.html",
+            "https://www.booking.com/hotel/tz/tulia-amp-spa.en-gb.html",
+            "https://www.booking.com/hotel/tz/sanna-boutique.en-gb.html",
             # Add more URLs...
         ]
 
